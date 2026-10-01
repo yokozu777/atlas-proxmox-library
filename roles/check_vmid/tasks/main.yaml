@@ -1,0 +1,31 @@
+---
+- name: Check whether the VMID is free
+  ansible.builtin.command:
+    argv: "{{ proxmox_library_vmid_argv }}"
+  environment:
+    PROXMOX_PASSWORD: "{{ proxmox_password }}"
+  register: proxmox_library_raw
+  changed_when: false
+  no_log: true
+  vars:
+    proxmox_library_vmid_argv:
+      - "{{ proxmox_library_bin | default(role_path | dirname | dirname ~ '/proxmox-library', true) }}"
+      - --host
+      - "{{ proxmox_host }}"
+      - --port
+      - "{{ proxmox_port | default(8006) | string }}"
+      - --user
+      - "{{ proxmox_user }}"
+      - vmid-free
+      - --vmid
+      - "{{ proxmox_vmid }}"
+
+- name: Read the VMID check
+  ansible.builtin.set_fact:
+    proxmox_vmid_free: "{{ (proxmox_library_raw.stdout | from_json).free }}"
+  no_log: true
+
+- name: Fail when the VMID is already used
+  ansible.builtin.fail:
+    msg: "VMID {{ proxmox_vmid }} is already used"
+  when: not (proxmox_vmid_free | bool)

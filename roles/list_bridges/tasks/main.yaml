@@ -1,0 +1,25 @@
+---
+- name: List Proxmox bridges
+  ansible.builtin.command:
+    argv: "{{ proxmox_library_bridges_argv }}"
+  environment:
+    PROXMOX_PASSWORD: "{{ proxmox_password }}"
+  register: proxmox_library_raw
+  changed_when: false
+  no_log: true
+  vars:
+    proxmox_library_bridges_argv:
+      - "{{ proxmox_library_bin | default(role_path | dirname | dirname ~ '/proxmox-library', true) }}"
+      - --host
+      - "{{ proxmox_host }}"
+      - --port
+      - "{{ proxmox_port | default(8006) | string }}"
+      - --user
+      - "{{ proxmox_user }}"
+      - bridges
+      - --node
+      - "{{ proxmox_node }}"
+
+- name: Read Proxmox bridges
+  ansible.builtin.set_fact:
+    proxmox_bridges: "{{ (proxmox_library_raw.stdout | from_json).bridges }}"

@@ -1,0 +1,27 @@
+---
+- name: Create a Proxmox API token
+  ansible.builtin.command:
+    argv: "{{ proxmox_library_token_argv }}"
+  environment:
+    PROXMOX_PASSWORD: "{{ proxmox_password }}"
+  register: proxmox_library_raw
+  changed_when: true
+  no_log: true
+  vars:
+    proxmox_library_token_argv:
+      - "{{ proxmox_library_bin | default(role_path | dirname | dirname ~ '/proxmox-library', true) }}"
+      - --host
+      - "{{ proxmox_host }}"
+      - --port
+      - "{{ proxmox_port | default(8006) | string }}"
+      - --user
+      - "{{ proxmox_user }}"
+      - create-token
+      - --token-id
+      - "{{ proxmox_token_id }}"
+
+- name: Read the new Proxmox token
+  ansible.builtin.set_fact:
+    proxmox_token_full_id: "{{ (proxmox_library_raw.stdout | from_json).token_id }}"
+    proxmox_token_secret: "{{ (proxmox_library_raw.stdout | from_json).secret }}"
+  no_log: true
