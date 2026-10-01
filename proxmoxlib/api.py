@@ -27,6 +27,18 @@ def storage_contents(row: dict[str, Any]) -> set[str]:
     return {part.strip() for part in parts if part.strip()}
 
 
+def _byte_count(value: Any) -> int | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, int):
+        return value if value >= 0 else None
+    if isinstance(value, float):
+        return int(value) if value >= 0 else None
+    if isinstance(value, str) and value.isdigit():
+        return int(value)
+    return None
+
+
 def usable_storages(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Storages that can hold a VM disk or a cloud-init drive."""
     found: list[dict[str, Any]] = []
@@ -42,27 +54,69 @@ def usable_storages(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         storage_id = str(row.get("storage") or "").strip()
         if not storage_id:
             continue
-        found.append(
-            {
-                "id": storage_id,
-                "type": str(row.get("type") or ""),
-                "content": sorted(contents),
-            }
-        )
+        item: dict[str, Any] = {
+            "id": storage_id,
+            "type": str(row.get("type") or ""),
+            "content": sorted(contents),
+        }
+        avail = _byte_count(row.get("avail"))
+        used = _byte_count(row.get("used"))
+        if avail is not None:
+            item["avail"] = avail
+        if used is not None:
+            item["used"] = used
+        found.append(item)
     return found
 
 
-def bridge_names(rows: list[dict[str, Any]]) -> list[str]:
-    names: list[str] = []
+def _ipv4_prefix(netmask: str) -> int | None:
+    parts = netmask.split(".")
+    if len(parts) != 4:
+        return None
+    try:
+        octets = [int(part) for part in parts]
+    except ValueError:
+        return None
+    if any(part < 0 or part > 255 for part in octets):
+        return None
+    bits = "".join(f"{part:08b}" for part in octets)
+    if "01" in bits:
+        return None
+    return bits.count("1")
+
+
+def bridge_cidr(row: dict[str, Any]) -> str:
+    cidr = str(row.get("cidr") or "").strip()
+    if cidr:
+        return cidr
+    address = str(row.get("address") or "").strip()
+    netmask = str(row.get("netmask") or "").strip()
+    if not address or not netmask:
+        return ""
+    prefix = _ipv4_prefix(netmask)
+    if prefix is None:
+        return ""
+    return f"{address}/{prefix}"
+
+
+def usable_bridges(rows: list[dict[str, Any]]) -> list[dict[str, str]]:
+    found: list[dict[str, str]] = []
+    seen: set[str] = set()
     for row in rows:
         if not isinstance(row, dict):
             continue
         if str(row.get("type") or "") != "bridge":
             continue
         name = str(row.get("iface") or "").strip()
-        if name and name not in names:
-            names.append(name)
-    return names
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        found.append({"name": name, "cidr": bridge_cidr(row)})
+    return found
+
+
+def bridge_names(rows: list[dict[str, Any]]) -> list[str]:
+    return [row["name"] for row in usable_bridges(rows)]
 
 
 def vmid_is_used(rows: list[dict[str, Any]], vmid: int) -> bool:
@@ -209,12 +263,12 @@ class ProxmoxClient:
             raise ProxmoxError("Proxmox storage response is invalid")
         return usable_storages(data)
 
-    def bridges(self, node: str) -> list[str]:
+    def bridges(self, node: str) -> list[dict[str, str]]:
         quoted = urllib.parse.quote(node.strip(), safe="")
         data = self._call("GET", f"/nodes/{quoted}/network")
         if not isinstance(data, list):
             raise ProxmoxError("Proxmox network response is invalid")
-        return bridge_names(data)
+        return usable_bridges(data)
 
     def vmid_free(self, vmid: int) -> bool:
         data = self._call("GET", "/cluster/resources")
@@ -228,19 +282,9 @@ class ProxmoxClient:
         data = self._call(
             "POST",
             f"/access/users/{user}/token/{token}",
-            {"privsep": "1", "comment": comment},
+            {"privsep": "0", "comment": comment},
         )
         if not isinstance(data, dict) or not data.get("value"):
             raise ProxmoxError("Proxmox did not return a token secret")
         full_id = str(data.get("full-tokenid") or f"{self.user}!{token_id}")
-        self._call(
-            "PUT",
-            "/access/acl",
-            {
-                "path": "/",
-                "roles": "PVEAdmin",
-                "tokens": full_id,
-                "propagate": "1",
-            },
-        )
         return {"token_id": full_id, "secret": str(data["value"])}

@@ -8,6 +8,7 @@ from proxmoxlib.api import (
     ProxmoxClient,
     ProxmoxError,
     bridge_names,
+    usable_bridges,
     usable_storages,
     vmid_is_used,
 )
@@ -24,6 +25,37 @@ class FilterTests(unittest.TestCase):
             ]
         )
         self.assertEqual(rows, [{"id": "local-zfs", "type": "zfspool", "content": ["images", "rootdir"]}])
+
+    def test_usable_storages_keep_free_and_used_bytes(self):
+        rows = usable_storages(
+            [
+                {
+                    "storage": "local-zfs",
+                    "type": "zfspool",
+                    "content": "images",
+                    "avail": 1024,
+                    "used": "2048",
+                }
+            ]
+        )
+        self.assertEqual(rows[0]["avail"], 1024)
+        self.assertEqual(rows[0]["used"], 2048)
+
+    def test_bridges_include_cidr(self):
+        rows = usable_bridges(
+            [
+                {"iface": "vmbr0", "type": "bridge", "cidr": "192.168.1.244/24"},
+                {"iface": "vmbr1", "type": "bridge", "address": "10.0.0.1", "netmask": "255.255.255.0"},
+                {"iface": "eth0", "type": "eth", "cidr": "192.168.1.2/24"},
+            ]
+        )
+        self.assertEqual(
+            rows,
+            [
+                {"name": "vmbr0", "cidr": "192.168.1.244/24"},
+                {"name": "vmbr1", "cidr": "10.0.0.1/24"},
+            ],
+        )
 
     def test_bridges_and_vmid(self):
         self.assertEqual(
@@ -72,11 +104,8 @@ class ClientTests(unittest.TestCase):
             if path.endswith("/token/atlas-ui"):
                 self.assertEqual(request.headers["Csrfpreventiontoken"], "CSRF")
                 self.assertIn("root%40pam", path)
+                self.assertIn("privsep=0", request.data.decode())
                 return _Body({"data": {"full-tokenid": "root@pam!atlas-ui", "value": "SECRET"}})
-            if path.endswith("/access/acl"):
-                self.assertIn("tokens=root%40pam%21atlas-ui", request.data.decode())
-                self.assertIn("roles=PVEAdmin", request.data.decode())
-                return _Body({"data": None})
             raise AssertionError(path)
 
         with patch("proxmoxlib.api.urllib.request.urlopen", fake_urlopen):
@@ -85,7 +114,8 @@ class ClientTests(unittest.TestCase):
             created = client.create_token("atlas-ui")
         self.assertEqual(created["token_id"], "root@pam!atlas-ui")
         self.assertEqual(created["secret"], "SECRET")
-        self.assertGreaterEqual(len(calls), 4)
+        self.assertEqual(len(calls), 3)
+        self.assertFalse(any(call.full_url.endswith("/access/acl") for call in calls))
 
     def test_http_error_hides_password(self):
         def fake_urlopen(request, timeout=None, context=None):

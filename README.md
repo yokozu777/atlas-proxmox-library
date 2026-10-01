@@ -2,6 +2,9 @@
 
 Proxmox VE helpers for Atlas. The `proxmox-library` CLI talks to the API. Ansible roles call that same binary. Atlas UI uses the CLI for dropdowns, VMID checks, and API tokens.
 
+**License:** Apache-2.0 ([`LICENSE`](LICENSE)).  
+**Checks:** `./tests/run_ci.sh`
+
 The password is the `PROXMOX_PASSWORD` environment variable. It is not an argument.
 
 ```bash
